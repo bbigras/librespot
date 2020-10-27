@@ -34,7 +34,7 @@ use librespot::playback::mixer::{self, Mixer, MixerConfig};
 use librespot::playback::player::{Player, PlayerEvent};
 
 mod player_event_handler;
-use crate::player_event_handler::{emit_sink_event, run_program_on_events};
+use crate::player_event_handler::{/*emit_sink_event,*/ run_program_on_events};
 
 fn device_id(name: &str) -> String {
     hex::encode(Sha1::digest(name.as_bytes()))
@@ -576,16 +576,17 @@ impl Future for Main {
                     progress = true;
                     if let Some(ref program) = self.player_event_program {
                         if let Some(child) = run_program_on_events(event, program) {
-                            let child = child
-                                .expect("program failed to start")
-                                .map(|status| {
-                                    if !status.success() {
-                                        error!("child exited with status {:?}", status.code());
-                                    }
-                                })
-                                .map_err(|e| error!("failed to wait on child process: {}", e));
-
-                            tokio::spawn(child);
+                            tokio::spawn(async {
+                                child
+                                    .expect("program failed to start")
+                                    .await
+                                    .map(|status| {
+                                        if !status.success() {
+                                            error!("child exited with status {:?}", status.code());
+                                        }
+                                    })
+                                    .map_err(|e| error!("failed to wait on child process: {}", e));
+                            });
                         }
                     }
                 }

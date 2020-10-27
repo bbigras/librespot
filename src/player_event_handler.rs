@@ -2,11 +2,13 @@ use librespot::playback::player::PlayerEvent;
 use log::info;
 use std::collections::HashMap;
 use std::io;
-use std::process::Command;
+// use std::process::Command;
+use tokio::process::Command;
 
 use futures::Future;
 use librespot::playback::player::SinkStatus;
 use tokio::process::Child;
+// use std::process::Child;
 
 fn run_program(program: &str, env_vars: HashMap<&str, String>) -> io::Result<Child> {
     let mut v: Vec<&str> = program.split_whitespace().collect();
@@ -67,7 +69,8 @@ pub fn run_program_on_events(event: PlayerEvent, onevent: &str) -> Option<io::Re
     Some(run_program(onevent, env_vars))
 }
 
-pub fn emit_sink_event(sink_status: SinkStatus, onevent: &str) {
+/*
+pub async fn emit_sink_event(sink_status: SinkStatus, onevent: &str) {
     let mut env_vars = HashMap::new();
     env_vars.insert("PLAYER_EVENT", "sink".to_string());
     let sink_status = match sink_status {
@@ -77,5 +80,6 @@ pub fn emit_sink_event(sink_status: SinkStatus, onevent: &str) {
     };
     env_vars.insert("SINK_STATUS", sink_status.to_string());
 
-    let _ = run_program(onevent, env_vars).and_then(|child| child.wait());
+    let _ = run_program(onevent, env_vars).and_then(|child| child.wait_with_output().await);
 }
+*/
