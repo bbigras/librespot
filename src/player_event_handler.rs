@@ -3,10 +3,10 @@ use log::info;
 use std::collections::HashMap;
 use std::io;
 use std::process::Command;
-use tokio_process::{Child, CommandExt};
 
 use futures::Future;
 use librespot::playback::player::SinkStatus;
+use tokio::process::Child;
 
 fn run_program(program: &str, env_vars: HashMap<&str, String>) -> io::Result<Child> {
     let mut v: Vec<&str> = program.split_whitespace().collect();
@@ -14,7 +14,7 @@ fn run_program(program: &str, env_vars: HashMap<&str, String>) -> io::Result<Chi
     Command::new(&v.remove(0))
         .args(&v)
         .envs(env_vars.iter())
-        .spawn_async()
+        .spawn()
 }
 
 pub fn run_program_on_events(event: PlayerEvent, onevent: &str) -> Option<io::Result<Child>> {

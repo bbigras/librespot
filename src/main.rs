@@ -1,16 +1,23 @@
-use futures::sync::mpsc::UnboundedReceiver;
-use futures::{Async, Future, Poll, Stream};
+use futures::channel::mpsc::UnboundedReceiver;
+use futures::{Future, Stream};
+// use futures::stream::Stream;
+// use futures::future::Future;
+use futures::task::Context;
+use futures::task::Poll;
+
 use log::{error, info, trace, warn};
 use sha1::{Digest, Sha1};
 use std::env;
 use std::io::{self, stderr, Write};
 use std::mem;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::process::exit;
 use std::str::FromStr;
 use std::time::Instant;
-use tokio_core::reactor::{Core, Handle};
-use tokio_io::IoStream;
+// use tokio_core::reactor::{Core, Handle};
+// use tokio_io::IoStream;
+use tokio_signal::IoStream;
 use url::Url;
 
 use librespot::core::authentication::{get_credentials, Credentials};
@@ -387,14 +394,13 @@ struct Main {
     device: Option<String>,
     mixer: fn(Option<MixerConfig>) -> Box<dyn Mixer>,
     mixer_config: MixerConfig,
-    handle: Handle,
 
     discovery: Option<DiscoveryStream>,
     signal: IoStream<()>,
 
     spirc: Option<Spirc>,
     spirc_task: Option<SpircTask>,
-    connect: Box<dyn Future<Item = Session, Error = io::Error>>,
+    connect: Box<dyn Future<Output = Result<Session, io::Error>>>,
 
     shutdown: bool,
     last_credentials: Option<Credentials>,
@@ -406,9 +412,8 @@ struct Main {
 }
 
 impl Main {
-    fn new(handle: Handle, setup: Setup) -> Main {
+    fn new(setup: Setup) -> Main {
         let mut task = Main {
-            handle: handle.clone(),
             cache: setup.cache,
             session_config: setup.session_config,
             player_config: setup.player_config,
@@ -437,7 +442,7 @@ impl Main {
             let device_id = task.session_config.device_id.clone();
 
             task.discovery =
-                Some(discovery(&handle, config, device_id, setup.zeroconf_port).unwrap());
+                Some(discovery(config, device_id, setup.zeroconf_port).unwrap());
         }
 
         if let Some(credentials) = setup.credentials {
@@ -450,29 +455,27 @@ impl Main {
     fn credentials(&mut self, credentials: Credentials) {
         self.last_credentials = Some(credentials.clone());
         let config = self.session_config.clone();
-        let handle = self.handle.clone();
 
-        let connection = Session::connect(config, credentials, self.cache.clone(), handle);
+        let connection = Session::connect(config, credentials, self.cache.clone());
 
         self.connect = connection;
         self.spirc = None;
         let task = mem::replace(&mut self.spirc_task, None);
         if let Some(task) = task {
-            self.handle.spawn(task);
+            tokio::spawn(task);
         }
     }
 }
 
 impl Future for Main {
-    type Item = ();
-    type Error = ();
+    type Output = ();
 
-    fn poll(&mut self) -> Poll<(), ()> {
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
         loop {
             let mut progress = false;
 
-            if let Some(Async::Ready(Some(creds))) =
-                self.discovery.as_mut().map(|d| d.poll().unwrap())
+            if let Some(Poll::Ready(Some(creds))) =
+                self.discovery.as_mut().map(|d| d.poll(cx).unwrap())
             {
                 if let Some(ref spirc) = self.spirc {
                     spirc.shutdown();
@@ -483,8 +486,8 @@ impl Future for Main {
                 progress = true;
             }
 
-            match self.connect.poll() {
-                Ok(Async::Ready(session)) => {
+            match self.connect.poll(cx) {
+                Ok(Poll::Ready(session)) => {
                     self.connect = Box::new(futures::future::empty());
                     let mixer_config = self.mixer_config.clone();
                     let mixer = (self.mixer)(Some(mixer_config));
@@ -515,24 +518,24 @@ impl Future for Main {
 
                     progress = true;
                 }
-                Ok(Async::NotReady) => (),
+                Ok(Poll::Pending) => (),
                 Err(error) => {
                     error!("Could not connect to server: {}", error);
                     self.connect = Box::new(futures::future::empty());
                 }
             }
 
-            if let Async::Ready(Some(())) = self.signal.poll().unwrap() {
+            if let Poll::Ready(Some(())) = self.signal.poll(cx).unwrap() {
                 trace!("Ctrl-C received");
                 if !self.shutdown {
                     if let Some(ref spirc) = self.spirc {
                         spirc.shutdown();
                     } else {
-                        return Ok(Async::Ready(()));
+                        return Ok(Poll::Ready(()));
                     }
                     self.shutdown = true;
                 } else {
-                    return Ok(Async::Ready(()));
+                    return Ok(Poll::Ready(()));
                 }
 
                 progress = true;
@@ -540,9 +543,9 @@ impl Future for Main {
 
             let mut drop_spirc_and_try_to_reconnect = false;
             if let Some(ref mut spirc_task) = self.spirc_task {
-                if let Async::Ready(()) = spirc_task.poll().unwrap() {
+                if let Poll::Ready(()) = spirc_task.poll(cx).unwrap() {
                     if self.shutdown {
-                        return Ok(Async::Ready(()));
+                        return Ok(Poll::Ready(()));
                     } else {
                         warn!("Spirc shut down unexpectedly");
                         drop_spirc_and_try_to_reconnect = true;
@@ -569,7 +572,7 @@ impl Future for Main {
             }
 
             if let Some(ref mut player_event_channel) = self.player_event_channel {
-                if let Async::Ready(Some(event)) = player_event_channel.poll().unwrap() {
+                if let Poll::Ready(Some(event)) = player_event_channel.poll_next(cx).unwrap() {
                     progress = true;
                     if let Some(ref program) = self.player_event_program {
                         if let Some(child) = run_program_on_events(event, program) {
@@ -582,27 +585,29 @@ impl Future for Main {
                                 })
                                 .map_err(|e| error!("failed to wait on child process: {}", e));
 
-                            self.handle.spawn(child);
+                            tokio::spawn(child);
                         }
                     }
                 }
             }
 
             if !progress {
-                return Ok(Async::NotReady);
+                return Ok(Poll::Pending);
             }
         }
     }
 }
 
+fn main() { }
+/*
 fn main() {
     if env::var("RUST_BACKTRACE").is_err() {
         env::set_var("RUST_BACKTRACE", "full")
     }
     let mut core = Core::new().unwrap();
-    let handle = core.handle();
 
     let args: Vec<String> = std::env::args().collect();
 
     core.run(Main::new(handle, setup(&args))).unwrap()
 }
+*/

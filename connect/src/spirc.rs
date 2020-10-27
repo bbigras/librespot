@@ -41,6 +41,7 @@ enum SpircPlayStatus {
     },
 }
 
+// #[derive(Debug, Hash, PartialEq, Eq, Clone)]
 pub struct SpircTask {
     player: Player,
     mixer: Box<dyn Mixer>,
@@ -55,15 +56,15 @@ pub struct SpircTask {
     mixer_started: bool,
     play_status: SpircPlayStatus,
 
-    subscription: Box<dyn Stream<Item = Frame, Error = MercuryError>>,
-    sender: Box<dyn Sink<SinkItem = Frame, SinkError = MercuryError>>,
+    subscription: Box<dyn Stream<Item = Frame, Error = MercuryError> + Send>,
+    sender: Box<dyn Sink<SinkItem = Frame, SinkError = MercuryError> + Send>,
     commands: mpsc::UnboundedReceiver<SpircCommand>,
     player_events: PlayerEventChannel,
 
     shutdown: bool,
     session: Session,
-    context_fut: Box<dyn Future<Item = serde_json::Value, Error = MercuryError>>,
-    autoplay_fut: Box<dyn Future<Item = String, Error = MercuryError>>,
+    context_fut: Box<dyn Future<Item = serde_json::Value, Error = MercuryError> + Send>,
+    autoplay_fut: Box<dyn Future<Item = String, Error = MercuryError> + Send>,
     context: Option<StationContext>,
 }
 
@@ -1064,7 +1065,7 @@ impl SpircTask {
     fn resolve_station(
         &self,
         uri: &str,
-    ) -> Box<dyn Future<Item = serde_json::Value, Error = MercuryError>> {
+    ) -> Box<dyn Future<Item = serde_json::Value, Error = MercuryError> + Send> {
         let radio_uri = format!("hm://radio-apollo/v3/stations/{}", uri);
 
         self.resolve_uri(&radio_uri)
@@ -1073,7 +1074,7 @@ impl SpircTask {
     fn resolve_autoplay_uri(
         &self,
         uri: &str,
-    ) -> Box<dyn Future<Item = String, Error = MercuryError>> {
+    ) -> Box<dyn Future<Item = String, Error = MercuryError> + Send> {
         let query_uri = format!("hm://autoplay-enabled/query?uri={}", uri);
         let request = self.session.mercury().get(query_uri);
         Box::new(request.and_then(move |response| {
@@ -1095,7 +1096,7 @@ impl SpircTask {
     fn resolve_uri(
         &self,
         uri: &str,
-    ) -> Box<dyn Future<Item = serde_json::Value, Error = MercuryError>> {
+    ) -> Box<dyn Future<Item = serde_json::Value, Error = MercuryError> + Send> {
         let request = self.session.mercury().get(uri);
 
         Box::new(request.and_then(move |response| {
